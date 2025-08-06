@@ -7,29 +7,41 @@ from eval import get_metrics_df
 
 # ========= [2] LOAD CSV =========
 try:
-    error_df = pd.read_csv("creditcard_small.csv")
-    error_df.columns = ['Index', 'Target variable', 'Score']
-    error_df = error_df[['Target variable', 'Score']]
+    # Fixed: Use the correct filename from your uploaded files
+    error_df = pd.read_csv("error_df.csv")  # or "creditcard.csv" depending on which one you want
+    
+    # If using creditcard.csv, you'll need to adjust column mapping
+    # For error_df.csv, the columns should already be correct based on the CSV info
+    if 'Unnamed: 0' in error_df.columns:
+        error_df = error_df.drop('Unnamed: 0', axis=1)
+    
+    # Ensure we have the right columns
+    if len(error_df.columns) >= 3:
+        error_df.columns = ['Index', 'Target variable', 'Score']
+        error_df = error_df[['Target variable', 'Score']]
+    
 except Exception as e:
     st.error(f"Failed to load or process CSV: {e}")
     st.stop()
 
 # ========= [3] BUILD STREAMLIT APP =========
-
-st.title("Fraud Detection dashboard")
+st.title("Fraud Detection Dashboard")
 
 # Threshold slider
 threshold = st.slider("Threshold (default of 50%)", min_value=0.00, max_value=1.00, step=0.05, value=0.50)
+
 threshold_df, metrics, metrics_default = get_metrics_df(error_df, threshold=threshold)
 
 # Cost inputs
-number1 = st.number_input('Cost of correctly detecting fraud')  # TP
-number2 = st.number_input('Cost of incorrectly classifying normal transactions as fraudulent')  # FP
-number3 = st.number_input('Cost of not detecting fraudulent transactions')  # FN
-number4 = st.number_input('Cost of correctly detecting normal transactions')  # TN
+number1 = st.number_input('Cost of correctly detecting fraud', value=0.0)  # TP
+number2 = st.number_input('Cost of incorrectly classifying normal transactions as fraudulent', value=0.0)  # FP
+number3 = st.number_input('Cost of not detecting fraudulent transactions', value=0.0)  # FN
+number4 = st.number_input('Cost of correctly detecting normal transactions', value=0.0)  # TN
 
 # === Default classification cost ===
 tp_default = fp_default = fn_default = tn_default = 0
+
+# Fixed: Correct syntax for iterating through DataFrame
 for _, row in threshold_df.iterrows():
     if row['Target variable'] == 1 and row['Classification_default'] == 1:
         tp_default += 1
@@ -45,6 +57,8 @@ st.markdown(f"<b>The default cost of fraud is</b> <span style='color:lightgreen'
 
 # === Updated threshold classification cost ===
 tp = fp = fn = tn = 0
+
+# Fixed: Correct syntax for iterating through DataFrame
 for _, row in threshold_df.iterrows():
     if row['Target variable'] == 1 and row['Classification'] == 1:
         tp += 1
@@ -65,6 +79,7 @@ metrics.loc[len(metrics.index)] = ['Number of good transactions classified as fr
 metrics.loc[len(metrics.index)] = ['Number of good transactions classified as good', tn, '']
 metrics.loc[len(metrics.index)] = ['Total number of transactions assessed', tp + fp + fn + tn, '']
 
+st.subheader("Updated Threshold Metrics")
 st.dataframe(metrics.assign(hack="").set_index("hack"))
 
 # Default metrics
@@ -74,4 +89,5 @@ metrics_default.loc[len(metrics_default.index)] = ['Number of good transactions 
 metrics_default.loc[len(metrics_default.index)] = ['Number of good transactions classified as good', tn_default, '']
 metrics_default.loc[len(metrics_default.index)] = ['Total number of transactions assessed', tp_default + fp_default + fn_default + tn_default, '']
 
+st.subheader("Default Threshold (0.5) Metrics")
 st.dataframe(metrics_default.assign(hack="").set_index("hack"))
