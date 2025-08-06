@@ -1,195 +1,175 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from eval import get_metrics_df
 
-# ========= STREAMLIT CONFIG =========
+# Configure Streamlit page
 st.set_page_config(page_title="Fraud Detection Dashboard", layout="wide")
 
-# ========= [1] IMPORT METRIC FUNCTION =========
-try:
-    from eval import get_metrics_df
-    st.success("✅ Successfully imported eval.py")
-except ImportError as e:
-    st.error(f"❌ Failed to import eval.py: {e}")
-    st.stop()
-
-# ========= [2] LOAD CSV =========
+# Cache the data loading to make it faster
 @st.cache_data
 def load_data():
     """Load and cache the dataset"""
     try:
-        # Try error_df.csv first (smaller file)
-        error_df = pd.read_csv("error_df.csv")
-        if error_df.columns[0].startswith('Unnamed'):
-            error_df = error_df.iloc[:, 1:]  # Remove unnamed index column
-        
-        # Ensure we have the right column names
-        if len(error_df.columns) >= 2:
-            error_df.columns = ['Target variable', 'Score']
-        
-        return error_df, "error_df.csv"
-        
-    except FileNotFoundError:
-        try:
-            # Fallback to creditcard.csv
-            st.info("error_df.csv not found, trying creditcard.csv...")
-            creditcard_df = pd.read_csv("creditcard.csv")
-            
-            # Use a sample for faster processing
-            if len(creditcard_df) > 10000:
-                creditcard_df = creditcard_df.sample(n=10000, random_state=42)
-                st.warning("Using 10,000 random samples from creditcard.csv for faster processing")
-            
-            # Create target and score columns
-            error_df = pd.DataFrame({
-                'Target variable': creditcard_df['Class'],
-                'Score': np.random.random(len(creditcard_df))  # Random scores for demo
-            })
-            
-            return error_df, "creditcard.csv (sampled)"
-            
-        except Exception as e:
-            st.error(f"❌ Could not load any CSV file: {e}")
-            st.write("Available files:", pd.Series([f for f in ['error_df.csv', 'creditcard.csv', 'requirements.txt', 'eval.py', 'app.py']]))
-            return None, None
+        error_df = pd.read_csv('error_df.csv')
+        error_df.columns = ['Index', 'Target variable', 'Score']
+        error_df = error_df[['Target variable', 'Score']]
+        return error_df
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return None
 
 # Load data
 with st.spinner("Loading data..."):
-    error_df, source_file = load_data()
+    error_df = load_data()
 
 if error_df is None:
     st.stop()
 
-st.success(f"✅ Successfully loaded {len(error_df):,} rows from {source_file}")
+# Display basic info
+st.success(f"✅ Data loaded: {len(error_df):,} transactions")
 
-# ========= [3] BUILD STREAMLIT APP =========
-st.title("🔍 Fraud Detection Dashboard")
-
-# Show basic data info
-with st.expander("📊 Dataset Overview"):
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("Total Transactions", f"{len(error_df):,}")
-    
-    with col2:
-        fraud_count = error_df['Target variable'].sum()
-        st.metric("Fraudulent", f"{fraud_count:,}")
-    
-    with col3:
-        fraud_rate = (fraud_count / len(error_df)) * 100
-        st.metric("Fraud Rate", f"{fraud_rate:.2f}%")
-    
-    st.dataframe(error_df.head(), use_container_width=True)
+# Create the app
+st.title("Fraud Detection Dashboard")
 
 # Threshold slider
-st.subheader("⚙️ Threshold Configuration")
 threshold = st.slider(
-    "Classification Threshold", 
+    "Threshold (default of 50%)", 
     min_value=0.00, 
     max_value=1.00, 
     step=0.05, 
-    value=0.50,
-    help="Adjust the threshold for classifying transactions as fraudulent"
+    value=0.50
 )
 
-# Calculate metrics
-try:
-    with st.spinner("Calculating metrics..."):
-        threshold_df, metrics, metrics_default = get_metrics_df(error_df, threshold=threshold)
-    st.success("✅ Metrics calculated successfully")
-except Exception as e:
-    st.error(f"❌ Error calculating metrics: {e}")
-    st.stop()
+# Calculate metrics (this might be slow, so add progress indicator)
+with st.spinner("Calculating metrics..."):
+    threshold_df, metrics, metrics_default = get_metrics_df(error_df, threshold=threshold)
 
-# Cost inputs
-st.subheader("💰 Cost Parameters")
+# Cost input boxes
+st.subheader("Cost Parameters")
 col1, col2 = st.columns(2)
 
 with col1:
-    number1 = st.number_input('Cost: True Positive (Correctly detect fraud)', value=100.0, min_value=0.0)
-    number3 = st.number_input('Cost: False Negative (Miss fraud)', value=-500.0)
+    number1 = st.number_input('Cost of correctly detecting fraud', value=0.0)  # true positive
+    number2 = st.number_input('Cost of incorrectly classifying normal transactions as fraudulent', value=0.0)  # false positive
 
 with col2:
-    number2 = st.number_input('Cost: False Positive (False alarm)', value=-50.0)
-    number4 = st.number_input('Cost: True Negative (Correctly detect normal)', value=1.0, min_value=0.0)
+    number3 = st.number_input('Cost of not detecting fraudulent transactions', value=0.0)  # false negative
+    number4 = st.number_input('Cost of correctly detecting normal transactions', value=0.0)  # true negative
 
-# Calculate confusion matrix values
-def calculate_confusion_matrix(df, classification_col):
-    tp = len(df[(df['Target variable'] == 1) & (df[classification_col] == 1)])
-    fp = len(df[(df['Target variable'] == 0) & (df[classification_col] == 1)])
-    fn = len(df[(df['Target variable'] == 1) & (df[classification_col] == 0)])
-    tn = len(df[(df['Target variable'] == 0) & (df[classification_col] == 0)])
+# Calculate confusion matrix efficiently using vectorized operations
+def calculate_confusion_matrix_fast(df, target_col, pred_col):
+    """Fast vectorized confusion matrix calculation"""
+    target = df[target_col]
+    pred = df[pred_col]
+    
+    tp = ((target == 1) & (pred == 1)).sum()
+    fp = ((target == 0) & (pred == 1)).sum()
+    fn = ((target == 1) & (pred == 0)).sum()
+    tn = ((target == 0) & (pred == 0)).sum()
+    
     return tp, fp, fn, tn
 
-# Calculate costs
-tp_default, fp_default, fn_default, tn_default = calculate_confusion_matrix(threshold_df, 'Classification_default')
-tp, fp, fn, tn = calculate_confusion_matrix(threshold_df, 'Classification')
+# Calculate confusion matrices
+with st.spinner("Calculating costs..."):
+    tp_default, fp_default, fn_default, tn_default = calculate_confusion_matrix_fast(
+        threshold_df, 'Target variable', 'Classification_default'
+    )
+    
+    tp, fp, fn, tn = calculate_confusion_matrix_fast(
+        threshold_df, 'Target variable', 'Classification'
+    )
 
+# Calculate costs
 default_cost = (number1 * tp_default) + (number2 * fp_default) + (number3 * fn_default) + (number4 * tn_default)
 updated_cost = (number1 * tp) + (number2 * fp) + (number3 * fn) + (number4 * tn)
 
-# Display results
-st.subheader("📈 Results")
-
+# Display costs
+st.subheader("Cost Analysis")
 col1, col2 = st.columns(2)
 
 with col1:
-    st.metric(
-        "Default Cost (threshold = 0.5)", 
-        f"${default_cost:,.2f}",
-        help="Cost using default 0.5 threshold"
-    )
+    st.metric("Default Cost (threshold = 0.5)", f"${default_cost:,.2f}")
 
 with col2:
-    cost_difference = default_cost - updated_cost
+    cost_diff = default_cost - updated_cost
     st.metric(
         f"Updated Cost (threshold = {threshold})", 
         f"${updated_cost:,.2f}",
-        delta=f"${cost_difference:,.2f} saved" if cost_difference > 0 else f"${abs(cost_difference):,.2f} increase",
-        delta_color="normal"
+        delta=f"${cost_diff:,.2f} saved" if cost_diff > 0 else f"${abs(cost_diff):,.2f} increase"
     )
 
-# Performance metrics comparison
-st.subheader("📊 Performance Comparison")
+# Create metrics tables more efficiently
+st.subheader("Performance Metrics")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    st.write("**Updated Threshold Results**")
-    performance_data = {
-        "Metric": ["True Positives", "False Positives", "False Negatives", "True Negatives"],
-        "Count": [tp, fp, fn, tn],
-        "Description": [
-            "Correctly detected fraud",
-            "False alarms", 
-            "Missed fraud",
-            "Correctly detected normal"
-        ]
-    }
-    st.dataframe(pd.DataFrame(performance_data), use_container_width=True, hide_index=True)
+    st.write("**Updated Threshold Metrics**")
+    # Create updated metrics dataframe
+    updated_metrics = metrics.copy()
+    new_rows = [
+        ['Number of fraudulent transactions detected', tp, ''],
+        ['Number of fraudulent transactions not detected', fn, ''],
+        ['Number of good transactions classified as fraudulent', fp, ''],
+        ['Number of good transactions classified as good', tn, ''],
+        ['Total number of transactions assessed', tp + fp + fn + tn, '']
+    ]
+    
+    for row in new_rows:
+        updated_metrics.loc[len(updated_metrics.index)] = row
+    
+    st.dataframe(updated_metrics.assign(hack="").set_index("hack"), use_container_width=True)
 
 with col2:
-    st.write("**Default Threshold (0.5) Results**")
-    performance_data_default = {
-        "Metric": ["True Positives", "False Positives", "False Negatives", "True Negatives"],
-        "Count": [tp_default, fp_default, fn_default, tn_default],
-        "Description": [
-            "Correctly detected fraud",
-            "False alarms",
-            "Missed fraud", 
-            "Correctly detected normal"
-        ]
-    }
-    st.dataframe(pd.DataFrame(performance_data_default), use_container_width=True, hide_index=True)
+    st.write("**Default Threshold (0.5) Metrics**")
+    # Create default metrics dataframe
+    default_metrics = metrics_default.copy()
+    new_rows_default = [
+        ['Number of fraudulent transactions detected', tp_default, ''],
+        ['Number of fraudulent transactions not detected', fn_default, ''],
+        ['Number of good transactions classified as fraudulent', fp_default, ''],
+        ['Number of good transactions classified as good', tn_default, ''],
+        ['Total number of transactions assessed', tp_default + fp_default + fn_default + tn_default, '']
+    ]
+    
+    for row in new_rows_default:
+        default_metrics.loc[len(default_metrics.index)] = row
+    
+    st.dataframe(default_metrics.assign(hack="").set_index("hack"), use_container_width=True)
 
-# Additional metrics
-if tp + fp > 0:
-    precision = tp / (tp + fp)
-    st.write(f"**Precision (Updated):** {precision:.3f}")
+# Additional insights
+st.subheader("Key Performance Indicators")
 
-if tp + fn > 0:
-    recall = tp / (tp + fn)
-    st.write(f"**Recall (Updated):** {recall:.3f}")
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    st.metric("Precision", f"{precision:.3f}")
+
+with col2:
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    st.metric("Recall", f"{recall:.3f}")
+
+with col3:
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    st.metric("F1 Score", f"{f1:.3f}")
+
+with col4:
+    accuracy = (tp + tn) / (tp + fp + fn + tn) if (tp + fp + fn + tn) > 0 else 0
+    st.metric("Accuracy", f"{accuracy:.3f}")
+
+# Data summary
+with st.expander("📊 Dataset Summary"):
+    fraud_count = error_df['Target variable'].sum()
+    total_count = len(error_df)
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Transactions", f"{total_count:,}")
+    with col2:
+        st.metric("Fraudulent", f"{fraud_count:,}")
+    with col3:
+        st.metric("Fraud Rate", f"{fraud_count/total_count*100:.2f}%")
 
 st.success("🎉 Dashboard loaded successfully!")
